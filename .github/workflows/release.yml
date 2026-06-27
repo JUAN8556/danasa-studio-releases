@@ -1,0 +1,140 @@
+# DANASA Studio — build + firma + release, CORRIENDO EN ESTE REPO PÚBLICO (Actions GRATIS,
+# macOS/Windows incluidos: GitHub no cobra runners estándar en repos públicos).
+# Hace checkout del fuente PRIVADO (JUAN8556/DANASA-Studio) con un PAT de solo-lectura
+# (secreto SOURCE_REPO_TOKEN, Contents:read) y publica el release AQUÍ → las URLs del
+# latest.json salen apuntando a este repo público (descargables sin auth).
+#
+# Disparar a mano con el tag del fuente:
+#   gh workflow run release.yml --repo JUAN8556/danasa-studio-releases -f source_ref=vX.Y.Z
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Tag o SHA del fuente privado a compilar (p.ej. v0.4.37)"
+        required: true
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest   # Apple Silicon
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest   # Intel
+            args: "--target x86_64-apple-darwin"
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      # Checkout del fuente PRIVADO en el ref pedido, con LFS real (modelo gte 341MB + índice
+      # bíblico 96MB + pandoc macOS). El PAT (SOURCE_REPO_TOKEN) necesita Contents:read sobre
+      # JUAN8556/DANASA-Studio. Sin lfs:true el bundle llevaría PUNTEROS y se rompe la app.
+      - uses: actions/checkout@v4
+        with:
+          repository: JUAN8556/DANASA-Studio
+          ref: ${{ inputs.source_ref }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          lfs: true
+
+      # Windows: quitar el pandoc de macOS (el glob lo bundlearía y pandoc_path lo tomaría
+      # antes que el .exe) y descargar pandoc.exe.
+      - name: pandoc.exe (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item "src-tauri/binaries/pandoc" -Force -ErrorAction SilentlyContinue
+          $ver = "3.5"
+          Invoke-WebRequest "https://github.com/jgm/pandoc/releases/download/$ver/pandoc-$ver-windows-x86_64.zip" -OutFile pandoc.zip
+          Expand-Archive pandoc.zip -DestinationPath pandoc_tmp -Force
+          $exe = Get-ChildItem -Path pandoc_tmp -Recurse -Filter pandoc.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item $exe.FullName "src-tauri/binaries/pandoc.exe" -Force
+
+      # macOS: el pandoc de LFS es Intel (x86_64); para la build aarch64 (Apple Silicon)
+      # bundlearlo daría "bad CPU type" en Macs ARM. Descargamos el pandoc de la ARQUITECTURA
+      # del target y verificamos con `file`.
+      - name: pandoc (macOS, por arquitectura)
+        if: runner.os == 'macOS'
+        run: |
+          if echo "${{ matrix.args }}" | grep -q aarch64; then ARCH=arm64; else ARCH=x86_64; fi
+          ver=3.5
+          curl -L -o pandoc.zip "https://github.com/jgm/pandoc/releases/download/$ver/pandoc-$ver-$ARCH-macOS.zip"
+          unzip -q -o pandoc.zip
+          bin=$(find . -path "*pandoc-$ver*" -name pandoc -type f | head -1)
+          mkdir -p src-tauri/binaries
+          cp "$bin" src-tauri/binaries/pandoc
+          chmod +x src-tauri/binaries/pandoc
+          rm -f src-tauri/binaries/pandoc.exe
+          file src-tauri/binaries/pandoc
+          file src-tauri/binaries/pandoc | grep -q "$ARCH" || (echo "pandoc arch != $ARCH" && exit 1)
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install frontend deps
+        run: npm ci
+
+      # Tests antes de publicar: suite JS + smokes Rust (cargo test -p danasa-embed carga
+      # el modelo real). Una release no debe publicarse si la lógica/embeddings regresan.
+      - name: Tests
+        run: |
+          npm test
+          cargo test -p danasa-engine -p danasa-embed
+
+      # Firma + notarización macOS: SOLO si el cert existe (SIGNING.md). Pasar APPLE_CERTIFICATE
+      # VACÍA hacía que tauri-action intentara `security import` de un cert vacío y fallara.
+      # Exportando las vars a $GITHUB_ENV solo cuando hay cert, el build sin firma se empaqueta
+      # bien, y al subir los secretos la firma se ACTIVA sola sin tocar este YAML.
+      - name: Firma macOS (solo si hay cert)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+            echo "Firma macOS: cert presente → activada"
+          else
+            echo "Firma macOS: sin cert (SIGNING.md) → build SIN firmar"
+          fi
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          # Release en ESTE repo público con el token POR DEFECTO (gratis, write a su propio
+          # repo). owner/repo explícitos para no depender de lo que se haya hecho checkout.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater: firma minisign de los artefactos OTA (createUpdaterArtifacts:true en el
+          # fuente). APPLE_* las inyecta el step anterior si hay cert (firma Apple opcional).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          owner: JUAN8556
+          repo: danasa-studio-releases
+          # El tag se crea en ESTE repo público desde su rama main (existe).
+          releaseCommitish: main
+          tagName: ${{ inputs.source_ref }}
+          releaseName: "DANASA Studio ${{ inputs.source_ref }}"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
