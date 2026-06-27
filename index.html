@@ -149,8 +149,10 @@
       if (dmgUni){
         items.push({key:"mac", ic:"", title:"macOS", desc:"Intel y Apple Silicon (universal)", url:dmgUni.browser_download_url, size:mb(dmgUni.size), reco:isMac});
       } else {
-        if (dmgArm)   items.push({key:"mac", ic:"", title:"Mac · Apple Silicon", desc:"Chips M1/M2/M3/M4", url:dmgArm.browser_download_url, size:mb(dmgArm.size), reco:isMac});
-        if (dmgIntel) items.push({key:"mac", ic:"", title:"Mac · Intel", desc:"Macs con procesador Intel", url:dmgIntel.browser_download_url, size:mb(dmgIntel.size), reco:isMac});
+        // Per-arch: NO resaltamos «tu sistema» (no se puede detectar Intel vs Apple Silicon
+        // desde el navegador) → la nota de abajo guía. Solo un Mac universal se resaltaría.
+        if (dmgArm)   items.push({key:"mac", ic:"", title:"Mac · Apple Silicon", desc:"Chips M1/M2/M3/M4", url:dmgArm.browser_download_url, size:mb(dmgArm.size), reco:false});
+        if (dmgIntel) items.push({key:"mac", ic:"", title:"Mac · Intel", desc:"Macs con procesador Intel", url:dmgIntel.browser_download_url, size:mb(dmgIntel.size), reco:false});
       }
       if (winExe) items.push({key:"win", ic:"⊞", title:"Windows", desc:"Instalador (.exe), 64-bit", url:winExe.browser_download_url, size:mb(winExe.size), reco:isWin});
 
