@@ -23,10 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest   # Apple Silicon
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest   # Intel
-            args: "--target x86_64-apple-darwin"
+          - platform: macos-latest   # Universal: Intel + Apple Silicon en UN solo .dmg
+            args: "--target universal-apple-darwin"
           - platform: windows-latest
             args: ""
     runs-on: ${{ matrix.platform }}
@@ -55,23 +53,25 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
           Copy-Item $exe.FullName "src-tauri/binaries/pandoc.exe" -Force
 
-      # macOS: el pandoc de LFS es Intel (x86_64); para la build aarch64 (Apple Silicon)
-      # bundlearlo daría "bad CPU type" en Macs ARM. Descargamos el pandoc de la ARQUITECTURA
-      # del target y verificamos con `file`.
-      - name: pandoc (macOS, por arquitectura)
+      # macOS Universal: el app universal corre en Intel Y Apple Silicon, así que pandoc TAMBIÉN
+      # debe ser UNIVERSAL — si no, en una de las dos arquitecturas correría mal/bajo Rosetta.
+      # Descargamos ambos pandoc (arm64 + x86_64) y los unimos con `lipo`.
+      - name: pandoc universal (macOS)
         if: runner.os == 'macOS'
         run: |
-          if echo "${{ matrix.args }}" | grep -q aarch64; then ARCH=arm64; else ARCH=x86_64; fi
           ver=3.5
-          curl -L -o pandoc.zip "https://github.com/jgm/pandoc/releases/download/$ver/pandoc-$ver-$ARCH-macOS.zip"
-          unzip -q -o pandoc.zip
-          bin=$(find . -path "*pandoc-$ver*" -name pandoc -type f | head -1)
+          curl -L -o pandoc-arm.zip "https://github.com/jgm/pandoc/releases/download/$ver/pandoc-$ver-arm64-macOS.zip"
+          curl -L -o pandoc-x64.zip "https://github.com/jgm/pandoc/releases/download/$ver/pandoc-$ver-x86_64-macOS.zip"
+          unzip -q -o pandoc-arm.zip
+          unzip -q -o pandoc-x64.zip
+          arm=$(find . -path "*pandoc-$ver-arm64*" -name pandoc -type f | head -1)
+          x64=$(find . -path "*pandoc-$ver-x86_64*" -name pandoc -type f | head -1)
           mkdir -p src-tauri/binaries
-          cp "$bin" src-tauri/binaries/pandoc
+          lipo -create "$arm" "$x64" -output src-tauri/binaries/pandoc
           chmod +x src-tauri/binaries/pandoc
           rm -f src-tauri/binaries/pandoc.exe
           file src-tauri/binaries/pandoc
-          file src-tauri/binaries/pandoc | grep -q "$ARCH" || (echo "pandoc arch != $ARCH" && exit 1)
+          file src-tauri/binaries/pandoc | grep -q "universal binary with 2 architectures" || (echo "pandoc NO es universal" && exit 1)
 
       - uses: actions/setup-node@v4
         with:
