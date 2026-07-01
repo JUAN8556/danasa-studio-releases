@@ -119,6 +119,24 @@ jobs:
             echo "Firma macOS: sin cert (SIGNING.md) → build SIN firmar"
           fi
 
+      # Sidecar de LanguageTool (#53 gramática/ortografía offline): JRE mínimo (jlink) +
+      # LanguageTool recortado a los idiomas de DANASA → src-tauri/resources/languagetool.
+      # verify:resources (beforeBuildCommand de tauri-action) FALLA si falta → va ANTES.
+      # El JRE es arch-específico → se jlink-ea en el runner de cada plataforma (nunca se commitea).
+      # macOS es UNIVERSAL (1 .app Intel+ARM): JRE x86_64 que corre nativo en Intel y bajo Rosetta
+      # en Apple Silicon (opción A, validada en el ci-build del fuente: job macos-sidecar).
+      - name: Rosetta 2 (jlink JDK x64 en runner arm64)
+        if: runner.os == 'macOS'
+        run: softwareupdate --install-rosetta --agree-to-license
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          architecture: x64
+      - name: Sidecar de LanguageTool (jlink + slim)
+        shell: bash
+        run: bash scripts/languagetool/build-sidecar.sh es en pt fr ca nl
+
       - uses: tauri-apps/tauri-action@v0
         env:
           # Release en ESTE repo público con el token POR DEFECTO (gratis, write a su propio
