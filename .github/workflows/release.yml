@@ -133,9 +133,16 @@ jobs:
           distribution: temurin
           java-version: "17"
           architecture: x64
+      # Tolerante hacia atrás: si el `source_ref` es un tag PRE-#53 (sin el script ni el sidecar
+      # en tauri.conf), se salta — ese build no requiere el sidecar y sale bien igual.
       - name: Sidecar de LanguageTool (jlink + slim)
         shell: bash
-        run: bash scripts/languagetool/build-sidecar.sh es en pt fr ca nl
+        run: |
+          if [ -f scripts/languagetool/build-sidecar.sh ]; then
+            bash scripts/languagetool/build-sidecar.sh es en pt fr ca nl
+          else
+            echo "Este ref no trae build-sidecar.sh (fuente pre-#53) -> sin sidecar, OK"
+          fi
 
       - uses: tauri-apps/tauri-action@v0
         env:
